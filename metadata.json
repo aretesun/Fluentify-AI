@@ -1,0 +1,7 @@
+{
+  "name": "Fluentify AI: English Conversation Practice",
+  "description": "An interactive web application for practicing real-life English conversations. Get instant feedback, sentence corrections, and contextual hints from an AI partner to improve your practical English skills.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
