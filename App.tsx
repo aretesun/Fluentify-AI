@@ -6,7 +6,7 @@ import CustomScenarioScreen from './components/CustomScenarioScreen';
 import ReportScreen from './components/ReportScreen';
 import { Scenario, Message, LearningReport } from './types';
 import { SCENARIOS } from './constants';
-import { createCustomScenario, startChat, generateReport } from './services/geminiService';
+import { createCustomScenario, generateReport } from './services/geminiService';
 import RoleSelectionModal from './components/RoleSelectionModal';
 
 type AppState = 'SELECT_SCENARIO' | 'CREATE_SCENARIO' | 'CHATTING' | 'REPORT';
@@ -18,10 +18,14 @@ const App: React.FC = () => {
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
   const [customPrompt, setCustomPrompt] = useState('');
   const [roleSelectionScenario, setRoleSelectionScenario] = useState<Scenario | null>(null);
+  const [isRoleReversed, setIsRoleReversed] = useState(false);
 
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [report, setReport] = useState<LearningReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+
+  // New state for travel destination
+  const [travelDestination, setTravelDestination] = useState<string | null>(null);
 
   useEffect(() => {
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -29,18 +33,12 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleStartChat = async (scenario: Scenario, isReversed: boolean) => {
+  const handleStartChat = (scenario: Scenario, isReversed: boolean) => {
     setRoleSelectionScenario(null);
     setCurrentScenario(scenario);
-    try {
-        const initialMessage = await startChat(scenario, isReversed);
-        setMessages([initialMessage]);
-        setAppState('CHATTING');
-    } catch (error) {
-        console.error("Failed to start chat:", error);
-        alert("Sorry, there was an error starting the chat. Please try again.");
-        handleBackToSelection();
-    }
+    setIsRoleReversed(isReversed);
+    setMessages([]); // Messages will be initialized within ChatScreen
+    setAppState('CHATTING');
   }
 
   const handleSelectScenario = (scenario: Scenario) => {
@@ -73,7 +71,7 @@ const App: React.FC = () => {
         scenarioType: 'conversation',
       };
       // Free chat starts directly without role selection
-      await handleStartChat(newScenario, false);
+      handleStartChat(newScenario, false);
     } catch (error) {
       console.error("Failed to create free chat scenario", error);
       alert("Sorry, there was an error starting the free chat. Please try again.");
@@ -91,7 +89,7 @@ const App: React.FC = () => {
         ...newScenarioData,
         scenarioType: 'conversation',
       };
-      await handleStartChat(newScenario, false);
+      handleStartChat(newScenario, false);
     } catch (error) {
       console.error("Failed to create custom scenario", error);
       alert("Sorry, there was an error creating your scenario. Please try again.");
@@ -143,7 +141,13 @@ const App: React.FC = () => {
         );
       case 'CHATTING':
         if (!currentScenario) return null;
-        return <ChatScreen scenario={currentScenario} initialMessages={messages} onBack={handleBackToSelection} onFinish={handleFinishSession} />;
+        return <ChatScreen 
+                    scenario={currentScenario} 
+                    isRoleReversed={isRoleReversed}
+                    onBack={handleBackToSelection} 
+                    onFinish={handleFinishSession} 
+                    travelDestination={travelDestination} 
+                />;
       case 'REPORT':
         return <ReportScreen 
                     isGenerating={isGeneratingReport} 
@@ -159,6 +163,9 @@ const App: React.FC = () => {
             onSelectRandom={handleSelectRandom}
             onSelectCreate={handleSelectCreate}
             onSelectFreeChat={handleSelectFreeChat}
+            travelDestination={travelDestination}
+            onSelectDestination={setTravelDestination}
+            onClearDestination={() => setTravelDestination(null)}
           />
         );
     }

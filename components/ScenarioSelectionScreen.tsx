@@ -4,12 +4,17 @@ import { Scenario } from '../types';
 import ScenarioCard from './ScenarioCard';
 import Header from './Header';
 import FreeChatModal from './FreeChatModal';
+import TravelModeModal from './TravelModeModal';
+import { MapPinIcon, XIcon } from './IconComponents';
 
 interface ScenarioSelectionScreenProps {
   onSelectScenario: (scenario: Scenario) => void;
   onSelectRandom: () => void;
   onSelectCreate: () => void;
   onSelectFreeChat: (topic: string) => void;
+  travelDestination: string | null;
+  onSelectDestination: (destination: string) => void;
+  onClearDestination: () => void;
 }
 
 const CATEGORIES: { key: Scenario['category']; title: string; description: string; }[] = [
@@ -48,10 +53,19 @@ const ScenarioSelectionScreen: React.FC<ScenarioSelectionScreenProps> = ({
   onSelectRandom,
   onSelectCreate,
   onSelectFreeChat,
+  travelDestination,
+  onSelectDestination,
+  onClearDestination,
 }) => {
   const [isFreeChatModalOpen, setIsFreeChatModalOpen] = useState(false);
+  const [isTravelModalOpen, setIsTravelModalOpen] = useState(false);
   
   const listeningScenario = SCENARIOS.find(s => s.category === '듣기');
+
+  const handleSelectTravelDestination = (destination: string) => {
+    onSelectDestination(destination);
+    setIsTravelModalOpen(false);
+  };
 
   return (
     <div className="flex flex-col w-full h-full">
@@ -59,6 +73,27 @@ const ScenarioSelectionScreen: React.FC<ScenarioSelectionScreenProps> = ({
 
       <main className="flex-1 overflow-y-auto">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-16">
+          {travelDestination && (
+            <div className="mb-12 p-4 bg-emerald-50 dark:bg-emerald-900/30 border-l-4 border-emerald-500 rounded-r-lg flex justify-between items-center">
+              <div>
+                <h3 className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+                  <MapPinIcon />
+                  Travel Mode: {travelDestination}
+                </h3>
+                <p className="text-sm text-emerald-700 dark:text-emerald-300 mt-1">
+                  Scenarios are now tailored for your trip. Enjoy your practice!
+                </p>
+              </div>
+              <button
+                onClick={onClearDestination}
+                className="p-2 rounded-full text-emerald-600 hover:bg-emerald-100 dark:text-emerald-300 dark:hover:bg-emerald-800"
+                aria-label="Clear travel destination"
+              >
+                <XIcon />
+              </button>
+            </div>
+          )}
+
           <div className="max-w-3xl mx-auto text-center">
             <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-gray-900 dark:text-white">
               영어 회화 연습 시작하기
@@ -87,7 +122,16 @@ const ScenarioSelectionScreen: React.FC<ScenarioSelectionScreenProps> = ({
             })}
              <div>
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">다른 연습 방법</h2>
-                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+                    <ActionCard 
+                        title="여행지 특화 모드"
+                        emoji="✈️"
+                        description="여행할 국가를 선택하고 현지 맞춤형으로 시나리오를 연습하세요."
+                        buttonText="국가 선택"
+                        buttonClassName="bg-emerald-600 hover:bg-emerald-700"
+                        imageUrl="https://images.unsplash.com/photo-1528543606781-2f6e6857f318?q=80&w=800"
+                        onClick={() => setIsTravelModalOpen(true)}
+                    />
                     <ActionCard 
                         title="직접 만들기"
                         emoji="🪄"
@@ -130,6 +174,12 @@ const ScenarioSelectionScreen: React.FC<ScenarioSelectionScreenProps> = ({
                 onSelectFreeChat(topic);
                 setIsFreeChatModalOpen(false);
             }}
+        />
+      )}
+      {isTravelModalOpen && (
+        <TravelModeModal 
+          onClose={() => setIsTravelModalOpen(false)}
+          onSelectDestination={handleSelectTravelDestination}
         />
       )}
     </div>

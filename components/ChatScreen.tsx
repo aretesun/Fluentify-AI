@@ -1,7 +1,7 @@
 // Fix: Added full content for ChatScreen.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import { Scenario, Message, Role, ListeningState } from '../types';
-import { sendMessage, getCorrection, getListeningStory, evaluateAnswerAndContinueListeningScenario, getContextualHints } from '../services/geminiService';
+import { startChat, sendMessage, getCorrection, getListeningStory, evaluateAnswerAndContinueListeningScenario, getContextualHints } from '../services/geminiService';
 import ChatBubble from './ChatBubble';
 import HintPill from './HintPill';
 import { BackIcon, SendIcon, BookOpenIcon, CheckCircleIcon, LightbulbIcon, Spinner, MicrophoneIcon, StopCircleIcon, SpeakerWaveIcon, XIcon, HistoryIcon, DownloadIcon, RefreshIcon, WrenchScrewdriverIcon } from './IconComponents';
@@ -104,9 +104,10 @@ interface HistoryModalProps {
   onClose: () => void;
   onPlayAudio: (messageId: number, text: string) => void;
   currentlyPlayingAudioId: number | null;
+  aiTutorName: string;
 }
 
-const HistoryModal: React.FC<HistoryModalProps> = ({ scenario, messages, isLoading, onClose, onPlayAudio, currentlyPlayingAudioId }) => {
+const HistoryModal: React.FC<HistoryModalProps> = ({ scenario, messages, isLoading, onClose, onPlayAudio, currentlyPlayingAudioId, aiTutorName }) => {
   const historyEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -115,7 +116,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ scenario, messages, isLoadi
 
   const handleDownload = () => {
     const conversationText = messages.map(msg => {
-      const prefix = msg.role === Role.USER ? 'You' : scenario.aiTutorName;
+      const prefix = msg.role === Role.USER ? 'You' : aiTutorName;
       return `${prefix}: ${msg.text}`;
     }).join('\n\n');
 
@@ -167,7 +168,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ scenario, messages, isLoadi
         
         <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
           {messages.map(msg => (
-            <ChatBubble key={msg.id} message={msg} aiTutorName={scenario.aiTutorName} onPlayAudio={onPlayAudio} currentlyPlayingAudioId={currentlyPlayingAudioId} />
+            <ChatBubble key={msg.id} message={msg} aiTutorName={aiTutorName} onPlayAudio={onPlayAudio} currentlyPlayingAudioId={currentlyPlayingAudioId} />
           ))}
           {isLoading && (
             <div className="flex justify-start">
@@ -176,7 +177,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ scenario, messages, isLoadi
                   <div className="w-10 h-10 rounded-full bg-cover bg-center shrink-0" style={{ backgroundImage: `url("https://picsum.photos/seed/ai-avatar/100/100")` }}></div>
                   <div className="flex items-center gap-2 text-gray-500">
                     <Spinner />
-                    <span>{scenario.aiTutorName} is thinking...</span>
+                    <span>{aiTutorName} is thinking...</span>
                   </div>
                 </div>
               </div>
@@ -191,15 +192,17 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ scenario, messages, isLoadi
 
 interface ChatScreenProps {
   scenario: Scenario;
-  initialMessages: Message[];
+  isRoleReversed: boolean;
   onBack: () => void;
   onFinish: (conversation: Message[]) => void;
+  travelDestination: string | null;
 }
 
-const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBack, onFinish }) => {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, isRoleReversed, onBack, onFinish, travelDestination }) => {
+  const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [isKeyPhrasesModalOpen, setIsKeyPhrasesModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isBuilderModalOpen, setIsBuilderModalOpen] = useState(false);
@@ -217,42 +220,17 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
   const [isFetchingHints, setIsFetchingHints] = useState(false);
 
   const recognitionRef = useRef<any | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const [currentlyPlayingAudioId, setCurrentlyPlayingAudioId] = useState<number | null>(null);
   const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
 
+  const [dynamicAiTutorName, setDynamicAiTutorName] = useState(scenario.aiTutorName);
+
   useEffect(() => {
-    const scoreVoice = (voice: SpeechSynthesisVoice) => {
-      let score = 0;
-      if (voice.lang === 'en-US') {
-        score += 10;
-        if (!voice.localService) score += 5; // Prefer network voices
-        if (voice.name.toLowerCase().includes('google')) score += 5; // Prefer Google voices
-      } else if (voice.lang.startsWith('en-')) {
-        score += 1; // Lower score for other English variants
-      }
-      return score;
-    };
-
-    const loadAndSelectVoice = () => {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        const bestVoice = voices
-          .filter(v => v.lang.startsWith('en-'))
-          .reduce((best, current) => {
-            return scoreVoice(current) > scoreVoice(best) ? current : best;
-          }, voices[0]);
-
-        setSelectedVoice(bestVoice || null);
-      }
-    };
-    
-    loadAndSelectVoice();
-    if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
-        window.speechSynthesis.onvoiceschanged = loadAndSelectVoice;
-    }
-  }, []);
-
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
+  
   const playSsmlText = (ssml: string, onEnd: () => void) => {
     if (!('speechSynthesis' in window)) return;
     speechSynthesis.cancel();
@@ -330,8 +308,8 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
     }
   };
 
-  const handlePlayAudio = (messageId: number, text: string) => {
-    if (currentlyPlayingAudioId === messageId) {
+  const handlePlayAudio = (messageId: number, text: string, forcePlay = false) => {
+    if (!forcePlay && currentlyPlayingAudioId === messageId) {
         if ('speechSynthesis' in window) {
             speechSynthesis.cancel();
         }
@@ -358,11 +336,66 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
   };
 
   useEffect(() => {
-    // Automatically play the first AI message when the chat starts.
-    if (initialMessages.length === 1 && initialMessages[0].role === Role.AI) {
-      handlePlayAudio(initialMessages[0].id, initialMessages[0].text);
+    const initializeChat = async () => {
+      setIsInitializing(true);
+      try {
+        const initialMessage = await startChat(scenario, isRoleReversed, travelDestination);
+        setMessages([initialMessage]);
+        
+        if (initialMessage.extractedName) {
+          setDynamicAiTutorName(initialMessage.extractedName);
+        }
+        
+        handlePlayAudio(initialMessage.id, initialMessage.text, true);
+
+      } catch (error) {
+        console.error("Failed to start chat:", error);
+        setMessages([{
+          id: Date.now(),
+          role: Role.AI,
+          text: "죄송합니다, 대화를 시작하는 중 오류가 발생했습니다. 뒤로 가서 다시 시도해 주세요.",
+        }]);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+    
+    initializeChat();
+    // This effect should only run when the scenario changes, not when other state updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenario, isRoleReversed, travelDestination]);
+
+  useEffect(() => {
+    const scoreVoice = (voice: SpeechSynthesisVoice) => {
+      let score = 0;
+      if (voice.lang === 'en-US') {
+        score += 10;
+        if (!voice.localService) score += 5; // Prefer network voices
+        if (voice.name.toLowerCase().includes('google')) score += 5; // Prefer Google voices
+      } else if (voice.lang.startsWith('en-')) {
+        score += 1; // Lower score for other English variants
+      }
+      return score;
+    };
+
+    const loadAndSelectVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        const bestVoice = voices
+          .filter(v => v.lang.startsWith('en-'))
+          .reduce((best, current) => {
+            return scoreVoice(current) > scoreVoice(best) ? current : best;
+          }, voices[0]);
+
+        setSelectedVoice(bestVoice || null);
+      }
+    };
+    
+    loadAndSelectVoice();
+    if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+        window.speechSynthesis.onvoiceschanged = loadAndSelectVoice;
     }
-  }, [initialMessages]);
+  }, []);
   
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -486,7 +519,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
 
   const handleSendConversationMessage = async () => {
     const trimmedInput = userInput.trim();
-    if (!trimmedInput || isLoading) return;
+    if (!trimmedInput || isLoading || isInitializing) return;
   
     const userMessage: Message = { id: Date.now(), role: Role.USER, text: trimmedInput };
     const messagesWithUser = [...messages, userMessage];
@@ -575,7 +608,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
                 ))}
                 <button 
                     onClick={handleRequestHints} 
-                    disabled={isFetchingHints || isLoading}
+                    disabled={isFetchingHints || isLoading || isInitializing}
                     className="p-1 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     aria-label="Get new hints"
                     title="Get new hints"
@@ -587,7 +620,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
         <div className="flex items-center gap-2 p-2 bg-gray-100 dark:bg-gray-700 rounded-xl">
             <button
                 onClick={() => setIsBuilderModalOpen(true)}
-                disabled={isLoading}
+                disabled={isLoading || isInitializing}
                 className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors shrink-0 disabled:opacity-50"
                 aria-label="Sentence Builder"
                 title="Sentence Builder"
@@ -606,11 +639,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
                 placeholder={isAwaitingRetry ? "추천 표현을 영어로 입력해보세요..." : (isListening ? "Listening..." : "Type or use the mic to talk...")}
                 className="w-full bg-transparent focus:outline-none resize-none px-2 py-1 text-gray-900 dark:text-white"
                 rows={1}
-                disabled={isLoading}
+                disabled={isLoading || isInitializing}
             />
              <button
                 onClick={handleMicClick}
-                disabled={isLoading || !recognitionRef.current}
+                disabled={isLoading || isInitializing || !recognitionRef.current}
                 className={`p-2 rounded-full text-white transition-colors shrink-0 ${
                     isListening ? 'bg-red-500 animate-pulse' : micPermissionDenied ? 'bg-gray-500 cursor-help' : 'bg-blue-600'
                 } disabled:bg-gray-400 disabled:cursor-not-allowed`}
@@ -619,7 +652,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
             >
                 {isListening ? <StopCircleIcon /> : <MicrophoneIcon />}
             </button>
-            <button onClick={handleSendMessage} disabled={!userInput.trim() || isLoading} className="p-2 rounded-full bg-blue-600 text-white disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors shrink-0">
+            <button onClick={handleSendMessage} disabled={!userInput.trim() || isLoading || isInitializing} className="p-2 rounded-full bg-blue-600 text-white disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors shrink-0">
                 {isLoading ? <Spinner /> : <SendIcon />}
             </button>
         </div>
@@ -682,72 +715,92 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, initialMessages, onBa
   
   return (
     <div 
-      className="relative h-full w-full bg-cover bg-center"
-      style={{ backgroundImage: scenario.chatBackgroundImageUrl ? `url(${scenario.chatBackgroundImageUrl})` : 'none' }}
+      className="relative h-full w-full bg-center bg-no-repeat bg-cover" 
+      style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url(${scenario.chatBackgroundImageUrl || scenario.imageUrl})` }}
     >
-      <div 
-        className={`absolute inset-0 ${scenario.chatBackgroundImageUrl 
-          ? 'bg-white/60 dark:bg-gray-900/70 backdrop-blur-sm' 
-          : 'bg-gray-100 dark:bg-gray-900'}`} 
-      />
-      
-      <div className="relative flex flex-col h-full w-full">
-        <header className="flex items-center justify-between p-4 border-b border-gray-200/50 dark:border-gray-800/50 bg-white/70 dark:bg-gray-800/70 backdrop-blur-md">
-            <button onClick={() => setShowExitConfirmModal(true)} className="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-black dark:hover:text-white">
-                <BackIcon />
-                <span>Back to Scenarios</span>
-            </button>
-            <div className="text-center">
-                <h1 className="text-lg font-bold text-gray-900 dark:text-white">{scenario.emoji} {scenario.title}</h1>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{scenario.description}</p>
-            </div>
-            <div className="flex items-center gap-2">
-                <button onClick={() => onFinish(messages)} className="flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-green-600 transition-colors">
-                    <CheckCircleIcon />
-                    분석
+      <div className="absolute inset-0 bg-background-light/80 dark:bg-background-dark/80 backdrop-blur-md"></div>
+      <div className="relative h-full w-full flex flex-col">
+        <header className="flex-shrink-0 z-10 w-full bg-background-light/70 dark:bg-background-dark/70 backdrop-blur-sm border-b border-gray-200 dark:border-gray-800">
+            <div className="max-w-4xl mx-auto flex items-center justify-between p-4">
+                <button onClick={() => setShowExitConfirmModal(true)} className="flex items-center text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:white">
+                    <BackIcon />
+                    뒤로
                 </button>
-                <button onClick={() => setIsHistoryModalOpen(true)} className="p-2 rounded-full hover:bg-gray-200/50 dark:hover:bg-gray-700/50" aria-label="View conversation history">
-                    <HistoryIcon />
-                </button>
-                <button onClick={() => setIsKeyPhrasesModalOpen(true)} className="p-2 rounded-full hover:bg-gray-200/50 dark:hover:bg-gray-700/50" aria-label="View key phrases">
-                    <BookOpenIcon />
-                </button>
+                <div className="text-center">
+                    <h1 className="text-lg font-bold text-gray-900 dark:text-white">{scenario.title}</h1>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{scenario.description}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={() => setIsKeyPhrasesModalOpen(true)}
+                        className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                        aria-label="View key phrases"
+                        title="View key phrases"
+                    >
+                        <BookOpenIcon />
+                    </button>
+                    <button 
+                        onClick={() => setIsHistoryModalOpen(true)}
+                        className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                        aria-label="View full conversation"
+                        title="View full conversation"
+                    >
+                        <HistoryIcon />
+                    </button>
+                </div>
             </div>
         </header>
 
-        <main className="flex-1 overflow-hidden p-4 md:p-6 flex flex-col">
-            <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col justify-center">
-                <div className="space-y-6">
-                    {messages.slice(Math.max(0, messages.length - 2)).map(msg => (
-                        <ChatBubble key={msg.id} message={msg} aiTutorName={scenario.aiTutorName} onPlayAudio={handlePlayAudio} currentlyPlayingAudioId={currentlyPlayingAudioId} />
-                    ))}
-                    {isLoading && (
-                      <div className="flex justify-start">
-                          <div className="bg-white dark:bg-gray-800 border border-gray-200/50 dark:border-gray-700/50 rounded-lg p-4 max-w-2xl">
-                              <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-full bg-cover bg-center shrink-0" style={{ backgroundImage: `url("https://picsum.photos/seed/ai-avatar/100/100")` }}></div>
-                              <div className="flex items-center gap-2 text-gray-500">
-                                  <Spinner />
-                                  <span>{scenario.aiTutorName} is thinking...</span>
-                              </div>
-                              </div>
-                          </div>
-                      </div>
-                    )}
-                </div>
+        <main className="flex-1 overflow-y-auto">
+            <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
+                {isInitializing ? (
+                    <div className="flex flex-col items-center justify-center pt-20 text-center">
+                        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+                        <p className="mt-4 text-gray-600 dark:text-gray-300">
+                            AI 튜터가 인사를 준비하고 있습니다...
+                        </p>
+                    </div>
+                ) : (
+                    messages.map((msg) => (
+                        <ChatBubble key={msg.id} message={msg} aiTutorName={dynamicAiTutorName} onPlayAudio={(id, text) => handlePlayAudio(id, text, false)} currentlyPlayingAudioId={currentlyPlayingAudioId} />
+                    ))
+                )}
+                {isLoading && (
+                   <div className="flex justify-start">
+                        <div className="bg-background-light dark:bg-background-dark border border-background-dark/10 dark:border-background-light/10 rounded-lg p-4 max-w-2xl">
+                            <div className="flex items-start gap-3">
+                                <div className="w-10 h-10 rounded-full bg-cover bg-center shrink-0" style={{ backgroundImage: `url("https://picsum.photos/seed/ai-avatar/100/100")` }}></div>
+                                <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+                                    <Spinner />
+                                    <span>{dynamicAiTutorName} is thinking...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <div ref={chatEndRef} />
             </div>
         </main>
         
-        <footer className="p-4 border-t border-gray-200/50 dark:border-gray-800/50 bg-white/70 dark:bg-gray-800/70 backdrop-blur-md">
+        <footer className="flex-shrink-0 z-10 w-full bg-background-light/70 dark:bg-background-dark/70 backdrop-blur-sm border-t border-gray-200 dark:border-gray-800 p-4">
             {scenario.scenarioType === 'listening' ? renderListeningFooter() : renderConversationFooter()}
         </footer>
-      </div>
 
         {isKeyPhrasesModalOpen && <KeyPhrasesModal scenario={scenario} onClose={() => setIsKeyPhrasesModalOpen(false)} />}
-        {isHistoryModalOpen && <HistoryModal scenario={scenario} messages={messages} isLoading={isLoading} onClose={() => setIsHistoryModalOpen(false)} onPlayAudio={handlePlayAudio} currentlyPlayingAudioId={currentlyPlayingAudioId} />}
+        {isHistoryModalOpen && <HistoryModal scenario={scenario} messages={messages} isLoading={isLoading} onClose={() => setIsHistoryModalOpen(false)} onPlayAudio={(id, text) => handlePlayAudio(id, text, false)} currentlyPlayingAudioId={currentlyPlayingAudioId} aiTutorName={dynamicAiTutorName} />}
+        {isBuilderModalOpen && <SentenceBuilderModal onClose={() => setIsBuilderModalOpen(false)} onComplete={handleSentenceBuilt}/>}
         {showPermissionModal && <MicrophonePermissionModal onClose={() => setShowPermissionModal(false)} />}
         {showExitConfirmModal && <ExitConfirmationModal onConfirm={onBack} onCancel={() => setShowExitConfirmModal(false)} />}
-        {isBuilderModalOpen && <SentenceBuilderModal onClose={() => setIsBuilderModalOpen(false)} onComplete={handleSentenceBuilt} />}
+        
+        {scenario.scenarioType !== 'listening' && listeningState === ListeningState.FINISHED && !isInitializing && (
+          <div className="absolute bottom-24 right-4 z-20">
+            <button onClick={() => onFinish(messages)} className="bg-green-500 text-white font-bold py-3 px-6 rounded-full shadow-lg hover:bg-green-600 transition-transform hover:scale-105 flex items-center gap-3">
+              <CheckCircleIcon />
+              세션 분석하기
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

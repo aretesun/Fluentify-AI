@@ -11,25 +11,61 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 let chat: Chat;
 let listeningStory: string = '';
 
-export const startChat = async (scenario: Scenario, isRoleReversed: boolean): Promise<Message> => {
+// AI 응답에서 이름 추출 함수
+const extractNameFromMessage = (message: string): string | null => {
+    // 패턴 1: "My name is [Name]", "I'm [Name]", "I am [Name]", "This is [Name]"
+    let match = message.match(/(?:my name is|i'm|i am|this is)\s+([A-Z][a-zà-žÀ-Ž\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+)/i);
+    if (match) return match[1];
+
+    // 패턴 2: "[Name] here" or "[Name] speaking"
+    match = message.match(/^([A-Z][a-zà-žÀ-Ž\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+)\s+(?:here|speaking)/i);
+    if (match) return match[1];
+
+    // 패턴 3: 첫 단어가 대문자로 시작하는 이름 (안전장치)
+    match = message.match(/^(?:Hi|Hello|Hey|Bonjour|Hola|Ciao|こんにちは|你好)[,!]?\s+(?:I'm|I am|my name is)?\s*([A-Z][a-zà-žÀ-Ž\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+)/i);
+    if (match) return match[1];
+
+    return null;
+};
+
+export const startChat = async (scenario: Scenario, isRoleReversed: boolean, travelDestination: string | null): Promise<Message> => {
     const userRoleName = isRoleReversed ? scenario.aiRole : scenario.userRole;
     const aiRoleName = isRoleReversed ? scenario.userRole : scenario.aiRole;
     let initialText = isRoleReversed ? scenario.initialMessageReversed : scenario.initialMessage;
 
     let systemInstruction;
+
+    const travelModeHeader = travelDestination ? `
+---
+**CRITICAL INSTRUCTIONS FOR TRAVEL MODE IN ${travelDestination.toUpperCase()}**
+1.  **CHARACTER NAME:** You MUST invent a new, culturally appropriate name for your character. You MUST NOT use the name '${scenario.aiTutorName}'. Create a name suitable for a '${aiRoleName}' in ${travelDestination}.
+    **IMPORTANT:** In your FIRST message, you MUST introduce yourself clearly using a format like "My name is [YOUR_NAME]" or "I'm [YOUR_NAME]".
+2.  **CULTURE & LANGUAGE:** You MUST integrate cultural details of ${travelDestination} (like food, places) and occasionally use simple local phrases (e.g., "¡Hola!").
+---
+` : '';
+
+    let finalSetting = scenario.setting;
+    let aiTutorNameForPrompt = scenario.aiTutorName;
+
+    if (travelDestination) {
+        finalSetting = `${scenario.setting} The scene is explicitly set in **${travelDestination}**.`;
+        aiTutorNameForPrompt = `(To be invented by you based on the critical Travel Mode instructions above)`;
+    }
+
+
     if (scenario.scenarioType === 'listening') {
         systemInstruction = `You are an AI English listening tutor. Your name is ${scenario.aiTutorName}.
         Your task is to tell a short, simple story based on this setting: "${scenario.setting}".
         After telling the story, you will ask the user 3-4 comprehension questions one by one.
         First, ask the user if they are ready to start. Your opening line is: "${initialText}"`;
     } else {
-        systemInstruction = `You are a method actor playing a character in an immersive English conversation practice scenario. Your goal is to make the experience as realistic and engaging as possible for the user.
+        systemInstruction = `${travelModeHeader}You are a method actor playing a character in an immersive English conversation practice scenario. Your goal is to make the experience as realistic and engaging as possible for the user.
 
 **Your Character & Scenario:**
-- **Your Name:** ${scenario.aiTutorName}
+- **Your Name:** ${aiTutorNameForPrompt}
 - **Your Role:** ${aiRoleName}
 - **The User's Role:** ${userRoleName}
-- **Setting:** ${scenario.setting}
+- **Setting:** ${finalSetting}
 - **User's Goal:** ${scenario.task}
 
 **CRITICAL ACTING INSTRUCTIONS:**
@@ -64,13 +100,25 @@ Your first line is: "${initialText}"`;
         },
     });
 
-    return {
-        id: Date.now(),
-        role: Role.AI,
-        text: initialText,
-    };
+    if (travelDestination && scenario.scenarioType === 'conversation') {
+        const response = await chat.sendMessage({ message: '' }); // Trigger the intro
+        const text = response.text;
+        const extractedName = extractNameFromMessage(text);
+        
+        return {
+            id: Date.now(),
+            role: Role.AI,
+            text: text,
+            extractedName: extractedName || undefined,
+        };
+    } else {
+        return {
+            id: Date.now(),
+            role: Role.AI,
+            text: initialText,
+        };
+    }
 };
-
 
 export const sendMessage = async (message: string): Promise<string> => {
     if (!chat) {

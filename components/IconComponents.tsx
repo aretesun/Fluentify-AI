@@ -117,3 +117,10 @@ export const WrenchScrewdriverIcon = () => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.878-5.878m-5.878 5.878L11.42 15.17m0 0L5.578 21m5.842-5.83a2.652 2.652 0 002.652-2.652V6.25a2.652 2.652 0 00-5.304 0v6.268a2.652 2.652 0 002.652 2.652zm-5.842-5.83a2.652 2.652 0 00-2.652 2.652V6.25a2.652 2.652 0 005.304 0v6.268a2.652 2.652 0 00-2.652-2.652zm0 0l5.842 5.83" />
     </svg>
 );
+
+export const MapPinIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+    </svg>
+);

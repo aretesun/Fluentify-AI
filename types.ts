@@ -24,6 +24,7 @@ export interface Message {
   role: Role;
   text: string;
   correction?: Correction | null;
+  extractedName?: string;
 }
 
 export interface KeyPhrase {
