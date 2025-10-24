@@ -1,5 +1,5 @@
-// Fix: Added full content for geminiService.ts
-import { GoogleGenAI, Type, GenerateContentResponse, Chat } from "@google/genai";
+// Fix: Added full content for services/geminiService.ts
+import { GoogleGenAI, Type, GenerateContentResponse, Chat, Content } from "@google/genai";
 import { Message, Role, Scenario, Correction, LearningReport, SentenceBuildingPlan, SentencePartValidation } from '../types';
 
 if (!process.env.API_KEY) {
@@ -8,7 +8,6 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-let chat: Chat;
 let listeningStory: string = '';
 
 // AI 응답에서 이름 추출 함수
@@ -28,12 +27,10 @@ const extractNameFromMessage = (message: string): string | null => {
     return null;
 };
 
-export const startChat = async (scenario: Scenario, isRoleReversed: boolean, travelDestination: string | null): Promise<Message> => {
+const getSystemInstruction = (scenario: Scenario, isRoleReversed: boolean, travelDestination: string | null): string => {
     const userRoleName = isRoleReversed ? scenario.aiRole : scenario.userRole;
     const aiRoleName = isRoleReversed ? scenario.userRole : scenario.aiRole;
     let initialText = isRoleReversed ? scenario.initialMessageReversed : scenario.initialMessage;
-
-    let systemInstruction;
 
     const travelModeHeader = travelDestination ? `
 ---
@@ -54,12 +51,13 @@ export const startChat = async (scenario: Scenario, isRoleReversed: boolean, tra
 
 
     if (scenario.scenarioType === 'listening') {
-        systemInstruction = `You are an AI English listening tutor. Your name is ${scenario.aiTutorName}.
+        return `You are an AI English listening tutor. Your name is ${scenario.aiTutorName}.
         Your task is to tell a short, simple story based on this setting: "${scenario.setting}".
         After telling the story, you will ask the user 3-4 comprehension questions one by one.
         First, ask the user if they are ready to start. Your opening line is: "${initialText}"`;
-    } else {
-        systemInstruction = `${travelModeHeader}You are a method actor playing a character in an immersive English conversation practice scenario. Your goal is to make the experience as realistic and engaging as possible for the user.
+    } 
+    
+    return `${travelModeHeader}You are a method actor playing a character in an immersive English conversation practice scenario. Your goal is to make the experience as realistic and engaging as possible for the user.
 
 **Your Character & Scenario:**
 - **Your Name:** ${aiTutorNameForPrompt}
@@ -90,17 +88,27 @@ export const startChat = async (scenario: Scenario, isRoleReversed: boolean, tra
         - As a new acquaintance at a party: "Hey, sorry to interrupt, but is that David over there? I think I went to high school with him."
         - As a waiter: "My apologies, but the chef just informed me we are out of the salmon. May I recommend our sea bass instead? It's excellent tonight."
 
-Your first line is: "${initialText}"`;
-    }
+Your first line is: "${isRoleReversed ? scenario.initialMessageReversed : scenario.initialMessage}"`;
+}
 
-    chat = ai.chats.create({
-        model: 'gemini-2.5-flash',
-        config: {
-            systemInstruction,
-        },
-    });
+const formatHistory = (messages: Message[]): Content[] => {
+    return messages.map(msg => ({
+        role: msg.role === Role.USER ? 'user' : 'model',
+        parts: [{ text: msg.text }]
+    }));
+};
+
+export const startChat = async (scenario: Scenario, isRoleReversed: boolean, travelDestination: string | null): Promise<Message> => {
+    const initialText = isRoleReversed ? scenario.initialMessageReversed : scenario.initialMessage;
 
     if (travelDestination && scenario.scenarioType === 'conversation') {
+        const systemInstruction = getSystemInstruction(scenario, isRoleReversed, travelDestination);
+        const chat = ai.chats.create({
+            model: 'gemini-2.5-flash',
+            config: {
+                systemInstruction,
+            },
+        });
         const response = await chat.sendMessage({ message: '' }); // Trigger the intro
         const text = response.text;
         const extractedName = extractNameFromMessage(text);
@@ -120,22 +128,46 @@ Your first line is: "${initialText}"`;
     }
 };
 
-export const sendMessage = async (message: string): Promise<string> => {
-    if (!chat) {
-        throw new Error("Chat not initialized. Call startChat first.");
-    }
+export const getAIResponse = async (
+    newMessage: string,
+    history: Message[],
+    scenario: Scenario,
+    isRoleReversed: boolean,
+    travelDestination: string | null
+): Promise<string> => {
+    const systemInstruction = getSystemInstruction(scenario, isRoleReversed, travelDestination);
+    const formattedHistory = formatHistory(history);
 
-    const response: GenerateContentResponse = await chat.sendMessage({ message });
+    const chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: { systemInstruction },
+        history: formattedHistory
+    });
+
+    const response: GenerateContentResponse = await chat.sendMessage({ message: newMessage });
     return response.text;
 };
 
-export const getListeningStory = async (): Promise<string> => {
-    if (!chat) {
-        throw new Error("Chat not initialized.");
-    }
-    const response = await chat.sendMessage({ message: "I'm ready." });
-    listeningStory = response.text; // Store the story for later evaluation
-    return response.text;
+export const getListeningStory = async (
+    history: Message[],
+    scenario: Scenario,
+    isRoleReversed: boolean
+): Promise<{ story: string; firstQuestion: string }> => {
+    const systemInstruction = getSystemInstruction(scenario, isRoleReversed, null);
+    const formattedHistory = formatHistory(history);
+    
+    const chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: { systemInstruction },
+        history: formattedHistory
+    });
+
+    const storyResponse = await chat.sendMessage({ message: "I'm ready." });
+    listeningStory = storyResponse.text; // Store the story for later evaluation
+
+    const questionResponse = await chat.sendMessage({ message: "Please ask the first question now." });
+    
+    return { story: listeningStory, firstQuestion: questionResponse.text };
 };
 
 const listeningEvaluationSchema = {
@@ -212,9 +244,11 @@ const correctionSchema = {
     required: ["is_correct", "original", "suggestions"]
 };
 
-export const getCorrection = async (userMessage: string): Promise<Correction | null> => {
+export const getCorrection = async (userMessage: string, conversationHistory: Message[]): Promise<Correction | null> => {
     try {
         const isKorean = /[\uAC00-\uD7AF]/.test(userMessage);
+        const lastAiMessage = conversationHistory.filter(m => m.role === Role.AI).pop()?.text || "No previous message.";
+        
         let prompt;
 
         if (isKorean) {
@@ -232,9 +266,15 @@ Your response must be in JSON format.
         } else {
             prompt = `You are an expert English tutor AI. Your role is to provide comprehensive feedback on a user's English sentence.
 The user is in a role-play conversation. Your feedback should be clear, helpful, and encouraging. Do not adopt the persona of the role-playing actor AI. Your persona is strictly that of a helpful tutor. All textual feedback (explanations, notes) must be in Korean.
-Analyze the following sentence from a student: "${userMessage}".
+
+Here is the context of the conversation:
+AI's last message: "${lastAiMessage}"
+User's response to analyze: "${userMessage}"
+
+CRITICAL: Analyze the user's message IN THE CONTEXT of the AI's last message. A short, one-word answer like "here" can be perfectly correct if it answers a direct question like "For here or to go?". Do NOT correct valid elliptical responses.
+
 Your response must be in JSON format.
-1.  **is_correct**: If the sentence is grammatically flawless AND sounds perfectly natural for a native speaker, set this to true. Otherwise, set it to false.
+1.  **is_correct**: If the sentence is grammatically flawless AND sounds perfectly natural for a native speaker IN THE GIVEN CONTEXT, set this to true. Otherwise, set it to false.
 2.  **original**: The user's original sentence.
 3.  **suggestions**: If 'is_correct' is false, provide an array with one primary, more natural-sounding suggestion. The 'explanation' must be a brief and clear reason for the change, in Korean.
 4.  **tone_feedback**: (Optional) If the tone is off (e.g., too blunt, too passive), provide a brief comment in Korean.

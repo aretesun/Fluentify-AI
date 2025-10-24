@@ -1,7 +1,7 @@
-// Fix: Added full content for ChatScreen.tsx
+// Fix: Added full content for components/ChatScreen.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import { Scenario, Message, Role, ListeningState } from '../types';
-import { startChat, sendMessage, getCorrection, getListeningStory, evaluateAnswerAndContinueListeningScenario, getContextualHints } from '../services/geminiService';
+import { startChat, getAIResponse, getCorrection, getListeningStory, evaluateAnswerAndContinueListeningScenario, getContextualHints } from '../services/geminiService';
 import ChatBubble from './ChatBubble';
 import HintPill from './HintPill';
 import { BackIcon, SendIcon, BookOpenIcon, CheckCircleIcon, LightbulbIcon, Spinner, MicrophoneIcon, StopCircleIcon, SpeakerWaveIcon, XIcon, HistoryIcon, DownloadIcon, RefreshIcon, WrenchScrewdriverIcon } from './IconComponents';
@@ -197,6 +197,8 @@ interface ChatScreenProps {
   onFinish: (conversation: Message[]) => void;
   travelDestination: string | null;
 }
+
+const VISIBLE_MESSAGES_COUNT = 12;
 
 const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, isRoleReversed, onBack, onFinish, travelDestination }) => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -457,13 +459,12 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, isRoleReversed, onBac
     setIsLoading(true);
     setListeningState(ListeningState.LISTENING);
     try {
-        const storyText = await getListeningStory();
+        const { story, firstQuestion } = await getListeningStory(messages, scenario, isRoleReversed);
         const storyMessage: Message = {
             id: Date.now(),
             role: Role.AI,
-            text: `(Story) ${storyText}`,
+            text: `(Story) ${story}`,
         };
-        const firstQuestion = await sendMessage("Please ask the first question now.");
         const questionMessage: Message = {
             id: Date.now() + 1,
             role: Role.AI,
@@ -520,42 +521,51 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, isRoleReversed, onBac
   const handleSendConversationMessage = async () => {
     const trimmedInput = userInput.trim();
     if (!trimmedInput || isLoading || isInitializing) return;
-  
+
     const userMessage: Message = { id: Date.now(), role: Role.USER, text: trimmedInput };
     const messagesWithUser = [...messages, userMessage];
     setMessages(messagesWithUser);
     setUserInput('');
     setIsLoading(true);
-  
-    try {
-      const correction = await getCorrection(trimmedInput);
-  
-      // If a correction is found (for either Korean input or incorrect English),
-      // update the message bubble with feedback and wait for the user to try again.
-      if (correction) {
-        setMessages(prev => prev.map(msg => (msg.id === userMessage.id ? { ...msg, correction } : msg)));
-        setIsAwaitingRetry(true);
-        setIsLoading(false);
-        return; // Stop here and wait for corrected input.
-      }
-      
-      // If no correction was needed, or if this is the user's retry, reset the flag and proceed.
-      if (isAwaitingRetry) {
-        setIsAwaitingRetry(false);
-      }
-      
-      const aiResponse = await sendMessage(trimmedInput);
-      const aiMessage: Message = { id: Date.now() + 1, role: Role.AI, text: aiResponse };
-      const updatedConversation = [...messagesWithUser, aiMessage];
-      setMessages(updatedConversation);
 
+    try {
+        const isKorean = /[\uAC00-\uD7AF]/.test(trimmedInput);
+
+        if (isKorean) {
+            const correction = await getCorrection(trimmedInput, messagesWithUser);
+            if (correction) {
+                setMessages(prev => prev.map(msg =>
+                    msg.id === userMessage.id ? { ...msg, correction } : msg
+                ));
+                setIsAwaitingRetry(true);
+            }
+        } else {
+            const correctionPromise = getCorrection(trimmedInput, messagesWithUser);
+            const responsePromise = getAIResponse(trimmedInput, messages, scenario, isRoleReversed, travelDestination);
+
+            const [correction, aiResponse] = await Promise.all([correctionPromise, responsePromise]);
+
+            if (correction) {
+                setMessages(prev => prev.map(msg =>
+                    msg.id === userMessage.id ? { ...msg, correction } : msg
+                ));
+                setIsAwaitingRetry(true);
+            } else {
+                if (isAwaitingRetry) {
+                    setIsAwaitingRetry(false);
+                }
+                const aiMessage: Message = { id: Date.now() + 1, role: Role.AI, text: aiResponse };
+                setMessages(prev => [...prev, aiMessage]);
+                handlePlayAudio(aiMessage.id, aiMessage.text, true);
+            }
+        }
     } catch (error) {
-      console.error("Error sending message:", error);
-      setIsAwaitingRetry(false);
-      const errorMessage: Message = { id: Date.now() + 1, role: Role.AI, text: "I'm sorry, I encountered an error. Please try again." };
-      setMessages(prev => [...prev, errorMessage]);
+        console.error("Error sending message:", error);
+        setIsAwaitingRetry(false);
+        const errorMessage: Message = { id: Date.now() + 1, role: Role.AI, text: "I'm sorry, I encountered an error. Please try again." };
+        setMessages(prev => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
   };
 
@@ -761,9 +771,22 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ scenario, isRoleReversed, onBac
                         </p>
                     </div>
                 ) : (
-                    messages.map((msg) => (
-                        <ChatBubble key={msg.id} message={msg} aiTutorName={dynamicAiTutorName} onPlayAudio={(id, text) => handlePlayAudio(id, text, false)} currentlyPlayingAudioId={currentlyPlayingAudioId} />
-                    ))
+                    <>
+                        {messages.length > VISIBLE_MESSAGES_COUNT && (
+                            <div className="text-center my-4">
+                                <button
+                                    onClick={() => setIsHistoryModalOpen(true)}
+                                    className="text-sm text-gray-500 dark:text-gray-400 hover:underline flex items-center gap-2 mx-auto bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded-full"
+                                >
+                                    <HistoryIcon />
+                                    이전 대화 보기
+                                </button>
+                            </div>
+                        )}
+                        {messages.slice(-VISIBLE_MESSAGES_COUNT).map((msg) => (
+                            <ChatBubble key={msg.id} message={msg} aiTutorName={dynamicAiTutorName} onPlayAudio={(id, text) => handlePlayAudio(id, text, false)} currentlyPlayingAudioId={currentlyPlayingAudioId} />
+                        ))}
+                    </>
                 )}
                 {isLoading && (
                    <div className="flex justify-start">
